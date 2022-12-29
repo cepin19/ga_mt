@@ -61,7 +61,7 @@ import sacremoses
 tok = sacremoses.MosesTokenizer(lang='en')
 detok = sacremoses.MosesDetokenizer(lang='en')
 score_cache = {}
-max_scores = {"fitness_chrf": 99.9, "fitness_bleu": 99.9, "fitness_bleu_multiref": 99.9}
+max_scores = {"fitness_chrf": 99.9, "fitness_bleu": 99.9, "fitness_bleu_multiref": 99.9, "fitness_chrf_multiref": 99.9}
 c = {}
 from collections import OrderedDict
 
@@ -114,7 +114,7 @@ class GA:
     def __init__(self, objective, src, init_pop, max_len, refs, possible_tgts, mutation_rate, crossover_rate,
                  generations,  model = None,
     model_qe = None, pseudo_refs = None,
-    caching = True, caching_scores = True, remove_id_pseudo = True, log = {}):
+    caching = True, caching_scores = True, remove_id_pseudo = True, log = {}, deletions=True):
 
         self.objective = getattr(self,objective)
 
@@ -137,6 +137,7 @@ class GA:
         self.caching_scores=caching_scores
         self.remove_id_pseudo=remove_id_pseudo
         self.log=log
+        self.deletions=deletions
         if model is not None:
             self.src_embeddings = self.build_single_embeddings([self.src], self.model, 1, self.emb_cache,
                                                         caching=self.caching)
@@ -339,7 +340,27 @@ class GA:
                 scores.append(s.score)
                 solution.score = s.score
         return scores
-
+    def fitness_chrf_multiref(self, src, src_embeddings, solutions, pseudo_refs=None, remove_id_pseudo=True, **kwargs):
+        scores = []
+        logging.info("ref: {}".format(pseudo_refs))
+        for solution in solutions:
+            if solution.score is not None:
+                scores.append(solution.score)
+            else:
+                so = solution.chromosome_detok
+                # Filter senences which were the same in translation and pseudo refs
+                #    pseudo_refs_f = [r.strip() for r in pseudo_refs if r != "#EMPTY"]
+                refs = []
+                for pr in pseudo_refs:
+                    if len(pseudo_refs) > 1 and remove_id_pseudo and so == pr.strip() and solution.original is True:
+                        # logging.error("skipping ref {} for hyp {}".format(pr,so))
+                        continue
+                    else:
+                        refs.append(pr)
+                s = sacrebleu.sentence_chrf(so, refs)
+                scores.append(s.score)
+                solution.score = s.score
+        return scores
     def fitness_bleu(self, src, src_embeddings, solutions, pseudo_refs=None, remove_id_pseudo=True, **kwargs):
         # print(' '.join(solution))
         scores = []
@@ -437,11 +458,19 @@ class GA:
 
     def fitness_comet_mbr_and_qe_and_bleu(self, src, src_embeddings, solutions, model=None, model_qe=None, pseudo_refs=None,
                                  pseudo_ref_embeddings=None, caching=True, caching_scores=True, remove_id_pseudo=True):
-        bleus=self.fitness_bleu_multiref(src, src_embeddings, solutions, pseudo_refs, remove_id_pseudo)
+        #bleus=self.fitness_bleu_multiref(src, src_embeddings, solutions, pseudo_refs, remove_id_pseudo)
+        bleus=self.fitness_bleu(src, src_embeddings, solutions, pseudo_refs, remove_id_pseudo)
         mbr_and_qe=self.fitness_comet_mbr_and_qe(src, src_embeddings, solutions, model, model_qe, pseudo_refs,
                                  pseudo_ref_embeddings, caching, caching_scores, remove_id_pseudo)
         return (np.asarray(bleus)/100)+np.asarray(mbr_and_qe)
 
+    def fitness_comet_mbr_and_qe_and_chrf(self, src, src_embeddings, solutions, model=None, model_qe=None, pseudo_refs=None,
+                                 pseudo_ref_embeddings=None, caching=True, caching_scores=True, remove_id_pseudo=True):
+        #bleus=self.fitness_bleu_multiref(src, src_embeddings, solutions, pseudo_refs, remove_id_pseudo)
+        bleus=self.fitness_chrf(src, src_embeddings, solutions, pseudo_refs, remove_id_pseudo)
+        mbr_and_qe=self.fitness_comet_mbr_and_qe(src, src_embeddings, solutions, model, model_qe, pseudo_refs,
+                                 pseudo_ref_embeddings, caching, caching_scores, remove_id_pseudo)
+        return (np.asarray(bleus)/100)+np.asarray(mbr_and_qe)
 
 
     def fitness_comet_mbr_and_qe(self, src, src_embeddings, solutions, model=None, model_qe=None, pseudo_refs=None,
@@ -559,6 +588,7 @@ class GA:
         return final_scores
 
 
+
     def mutation(self, solution, possible_tgt):
         # TODO: solve for multi-token expressions
         # It should be more probable to .replace existing word rather than an emtpy one (i.e. adding a new word)
@@ -587,6 +617,71 @@ class GA:
                     delete = False
                 else:
                     delete = True
+                    tgt = [''] * len(tgt)
+                delete = False
+                if l > 1:
+                    # find empty places in the gene
+                    space_i = [a for a, x in enumerate(bitstring) if x == '']
+                    if l > len(space_i):  # wait, thats illegal (we cant make the gene longer)
+                        continue
+                    #            for x in range(l):
+                    # print(bitstring)
+                    #               print(space_i)
+                    #              print(x)
+                    #             print(space_i[-x-1])
+                    #
+                    #                   del bitstring[space_i[-x-1]]  #we need to iterate backwards to not mess up the order
+                    #              print(i)
+                    #             print(bitstring)
+                    #                logging.warning("inserting {} instead of {}".format(tgt, bitstring[i]))
+                    if bitstring[i]:
+                        if i == 0 and bitstring[i][0].isupper():  # uppercase the first letter, if start of the sentence
+                            tgt[0] = tgt[0].capitalize()
+                    if delete:
+                        bitstring[i] = ''
+                    else:
+                        bitstring[i] = tgt[0]
+                    for x in range(1, l):
+                        if delete:
+                            bitstring.insert(i + x, '')
+                        else:
+                            bitstring.insert(i + x, tgt[x])
+                        space_i = [a for a, t in enumerate(bitstring) if t == '']
+                        # logging.warning(space_i)
+                        # logging.warning(x)
+                        # logging.warning(bitstring)
+                        del bitstring[space_i[-1]]
+                else:
+                    x = 0
+                    bitstring[i] = tgt[x]
+        return bitstring
+
+    def mutation_(self, solution, possible_tgt, deletions=True):
+        # TODO: solve for multi-token expressions
+        # It should be more probable to .replace existing word rather than an emtpy one (i.e. adding a new word)
+        empty_repl = 0.1
+        del_prob=0.1
+        bitstring = solution.chromosome.copy()
+        for i in range(len(bitstring)):
+            # check for a mutation
+            if rand() < (self.mutation_rate / len(bitstring)):
+                if bitstring[i] == '':
+                    if rand() > empty_repl:  # do not add word to an empty place
+                        continue
+
+                tgt = random.choice(possible_tgt)
+                #          if rand() > empty_repl*(sum([len(t) for t in possible_tgt])/len(possible_tgt)): # deletion of a word or insertion of a new word should have the same probs, but also some possible tgts are longer than 1 tokent, so try we account for that
+                # how does crossover factor into this?
+                #               tgt = random.choice(possible_tgt)  # .split(' ')
+                #   logging.info(
+                #      "nonempty repl!!! {}".format(empty_repl * (sum([len(t) for t in possible_tgt]) / len(possible_tgt))))
+                # else:
+                #    logging.info("empty repl!!! {}".format(empty_repl*(sum([len(t) for t in possible_tgt])/len(possible_tgt))))
+                #    tgt=''
+                #                bitstring[i]=''
+                # continue
+                l = len(tgt)
+                if rand() < del_prob and deletions is True:  # *(sum([len(t) for t in possible_tgt])/len(possible_tgt)):
                     tgt = [''] * len(tgt)
                 delete = False
                 if l > 1:
@@ -675,6 +770,7 @@ class GA:
     def run(self):
         # initial population of random bitstring
         # keep track of best solution
+
         logging.info("fitness function: {}".format(self.objective.__name__))
         pop = self.init_pop
         best, best_eval = pop[0], self.objective(self.src, self.src_embeddings, pop, model=self.model, model_qe=self.model_qe,
@@ -747,7 +843,7 @@ class GA:
                 # crossover and mutation
                 for c in self.crossover(p1, p2):
                     # mutation
-                    new_chromosome = self.mutation(c, self.possible_tgts)
+                    new_chromosome = self.mutation(c, self.possible_tgts,deletions=self.deletions)
                     if new_chromosome != c.chromosome:
                         del c
                         c = Solution(new_chromosome)
@@ -791,7 +887,8 @@ def ga_init(cfg, model, model_qe):
                 news = []
                 for t in s:
                     news.append(t)
-                    news.append('')
+                    if cfg.no_empty == False:
+                        news.append('')
                 pop.append(news)
             tgt_toks = list(set([tok for sent in init_pop for tok in sent]))
             tgt_toks = [[tok] for tok in tgt_toks]
@@ -804,10 +901,15 @@ def ga_init(cfg, model, model_qe):
             # possible_tgt = tgt_toks + [['']]*(len(tgt_toks)+len(dict_toks)) + dict_toks
             possible_tgt = tgt_toks + dict_toks  # + [[''] for tok in tgt_toks] + [['' for t in toks] for toks in dict_toks]
 
+            #ATTENTION! NEW
+           # possible_tgt= [tok for tok in possible_tgt if tok != ['']]
             logging.info(possible_tgt)
             max_len = int(max([len(s) for s in pop]) * 1.1)
             # PAD
-            pop = [(p + max_len * [''])[:max_len] for p in pop] * 50
+            if cfg.no_empty == True:
+                pop=pop*50
+            else:
+                pop = [(p + max_len * [''])[:max_len] for p in pop] * 50
             orig_sents = translations_sent * 50  # Do not fuck up retokenization at least in first gen
 
             # logging.warning()
@@ -816,12 +918,15 @@ def ga_init(cfg, model, model_qe):
             for sol, orig in zip(solution_pop, orig_sents):
                 sol.chromosome_detok = orig
             log = {}
-
+            if cfg.no_empty == True:
+                deletions = False
+            else:
+                deletions = True
             ga = GA(cfg.fitness, src, solution_pop, max_len, pseudo_refs_sent, possible_tgt, cfg.mutation, cfg.crossover,
                     cfg.generations,model=model, model_qe=model_qe,
                                  pseudo_refs=pseudo_refs_sent, caching=cfg.cache_embeddings,
                                  caching_scores=cfg.cache_scores, remove_id_pseudo=cfg.remove_identical_pseudorefs,
-                                 log=log)
+                                 log=log,deletions=deletions)
 
             out = ga.run()[0]
             print(out.chromosome_detok.strip().replace('□',' '))
@@ -843,6 +948,7 @@ def mbr_command() -> None:
     parser.add_argument("-g", "--generations", type=int, default=100)
     parser.add_argument("-p", "--pseudo_ref", type=Path_fr)
     parser.add_argument("--cache-embeddings", "--cache-embeddings", type=bool, default=True)
+    parser.add_argument("--no-empty", "--no-empty", type=bool, default=False)
 
     parser.add_argument("--cache-scores", "--cache-scores", type=bool, default=True)
     parser.add_argument("--remove-identical-pseudorefs", "-remove-identical-pseudorefs", type=bool, default=True)
@@ -909,7 +1015,7 @@ def mbr_command() -> None:
             )
 
         )
-    if cfg.fitness not in ["fitness_bleu", "fitness_chrf", "fitness_bleu_multiref"]:
+    if cfg.fitness not in ["fitness_bleu", "fitness_chrf", "fitness_bleu_multiref","fitness_chrf_multiref"]:
         # model_path = download_model("wmt21-cometinho-da")
         # model_path = download_model("wmt20-comet-da")
 
