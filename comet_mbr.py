@@ -589,7 +589,7 @@ class GA:
 
 
 
-    def mutation(self, solution, possible_tgt):
+    def mutation(self, solution, possible_tgt, deletions=True):
         # TODO: solve for multi-token expressions
         # It should be more probable to .replace existing word rather than an emtpy one (i.e. adding a new word)
         empty_repl = 0.1
@@ -656,7 +656,7 @@ class GA:
                     bitstring[i] = tgt[x]
         return bitstring
 
-    def mutation_(self, solution, possible_tgt, deletions=True):
+    def mutation_old(self, solution, possible_tgt, deletions=True):
         # TODO: solve for multi-token expressions
         # It should be more probable to .replace existing word rather than an emtpy one (i.e. adding a new word)
         empty_repl = 0.1
