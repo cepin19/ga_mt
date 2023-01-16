@@ -873,10 +873,15 @@ def ga_init(cfg, model, model_qe):
         i = 0
         if cfg.dict is not None:
             dict_tgts = open(cfg.dict())
+        elif cfg.wordlist_dict is not None:
+            dict_tgts = open(cfg.wordlist_dict())
         else:
             dict_tgts = [';'] * len(srcs)
-
+        
         for dict_tgt, src in zip(dict_tgts, srcs):
+            # We assume wordlist "dictionary" has only 1 lines, same for each example, so we reset the reading for each one
+            if cfg.wordlist_dict is not None:
+                dict_tgts.seek(0)
             translations_sent = translations[i * n_best:(i + 1) * n_best]
             pseudo_refs_sent = pseudo_refs[i * n_refs:(i + 1) * n_refs]
 
@@ -903,7 +908,7 @@ def ga_init(cfg, model, model_qe):
 
             #ATTENTION! NEW
            # possible_tgt= [tok for tok in possible_tgt if tok != ['']]
-            logging.info(possible_tgt)
+#            logging.info(possible_tgt)
             max_len = int(max([len(s) for s in pop]) * 1.1)
             # PAD
             if cfg.no_empty == True:
@@ -955,7 +960,7 @@ def mbr_command() -> None:
     parser.add_argument("--multitok-dict", type=bool, default=True)
 
     parser.add_argument("-d", "--dict", type=Path_fr, default=None)
-
+    parser.add_argument("-w", "--wordlist_dict", type=Path_fr, default=None)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--num_samples", type=int, required=True)
     parser.add_argument("--num_pseudo_refs", type=int, required=True)
@@ -1015,7 +1020,7 @@ def mbr_command() -> None:
             )
 
         )
-    if cfg.fitness not in ["fitness_bleu", "fitness_chrf", "fitness_bleu_multiref","fitness_chrf_multiref"]:
+    if cfg.fitness not in ["fitness_bleu", "fitness_chrf", "fitness_bleu_multiref","fitness_chrf_multiref","fitness_qe"]:
         # model_path = download_model("wmt21-cometinho-da")
         # model_path = download_model("wmt20-comet-da")
 
